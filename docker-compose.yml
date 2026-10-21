@@ -1,0 +1,32 @@
+services:
+  match:
+    build: .
+    image: 1n9-match:latest
+    container_name: 1n9-match
+    # CENTRAL_URL + LICENSE_KEY + NODE_PASSWORD (+ ค่าเริ่มต้นของโมเดล ถ้าต้องการ)
+    env_file: .env
+    environment:
+      # documents are stored in the Qdrant below by default (central reaches it through the tunnel this app opens itself)
+      VECTOR_TYPE: ${VECTOR_TYPE:-}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+    ports:
+      # ค่าเริ่มต้นเปิดเฉพาะเครื่องตัวเอง — ถ้าจะให้เครื่องอื่นเข้าได้ ตั้ง NODE_BIND=0.0.0.0 (และต้องตั้ง NODE_PASSWORD)
+      - "${NODE_BIND:-127.0.0.1}:${MATCH_PORT:-8081}:8080"
+    volumes:
+      # node.db + ไฟล์เอกสารต้นฉบับ — อยู่รอดข้ามการ rebuild/restart
+      - match-data:/app/data
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+  # vector database on this machine — no port is published, only this app talks to it
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    container_name: 1n9-match-qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  match-data:
+  qdrant-data:
