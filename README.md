@@ -23,6 +23,21 @@ browser ──▶ 1n9 Match (this repo, your machine) ──▶ 1n9 central (pro
 - One checklist = one collection in your vector database. Deleting a checklist deletes its vectors and files.
 - The app only calls out to central. No inbound port or public IP is needed.
 
+## Packs (kinds of checking work)
+
+One engine, many kinds of work. A pack is one JSON file that picks the screens, the words on them,
+the allowed modes and which functions are on. Packs never add text to what is sent to the AI.
+
+- Make your own on the **Packs** page in the back office: give it a name, pick the modes and functions.
+  Switch any pack and its functions on or off there too.
+- Samples shipped in `packs/` (general, tender/TOR check, applicant screening).
+- Advanced: a pack can also be a file `<id>.json` in `data/packs/` (a `README.txt` there shows the format);
+  files can also replace any screen text. A file with the same `id` as a sample replaces it.
+
+Functions a pack can switch on: `ai_parse` (AI splits pasted text into requirements), `templates`,
+`hard_filter` (knock-out items in compare mode), `gap_list` (what is still missing, per document).
+Checking documents against the requirements is always on.
+
 ## Run with Docker
 
 ```bash

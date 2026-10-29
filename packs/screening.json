@@ -1,0 +1,15 @@
+{
+  "id": "screening",
+  "order": 20,
+  "name": "pack.screening.name",
+  "description": "pack.screening.desc",
+  "modes": ["compare", "compliance"],
+  "default_mode": "compare",
+  "functions": ["ai_parse", "templates", "hard_filter", "gap_list"],
+  "text": {
+    "jobform.title": "pack.screening.new",
+    "jobform.name": "pack.screening.job_name",
+    "req.title": "pack.screening.req_title",
+    "res.title": "pack.screening.docs_title"
+  }
+}

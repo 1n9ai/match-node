@@ -12,6 +12,7 @@ import { ErrorNote, Loading } from "@/components/Shell";
 import { Button } from "@/components/ui/Button";
 import { createTemplate, deleteJob, getJob, listTemplates, runMatch, updateJob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { findPack, usePacks, usePackText } from "@/lib/packs";
 import type { Job, JobMode, Requirement, Template } from "@/lib/types";
 
 function Panel({ icon, title, subtitle, action, children }: { icon: ReactNode; title: string; subtitle?: string; action?: ReactNode; children: ReactNode }) {
@@ -47,6 +48,9 @@ function JobDetail({ id }: { id: string }) {
   const [matching, setMatching] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
+  const { packs } = usePacks();
+  const pack = findPack(packs, job?.pack);
+  const { text, tp, has } = usePackText(pack);
 
   const load = useCallback(
     async (resetDraft = false) => {
@@ -83,6 +87,7 @@ function JobDetail({ id }: { id: string }) {
   if (!job) return error ? <ErrorNote message={error} /> : <Loading />;
 
   const dirty = !same(draft, job.requirements);
+  const packTemplates = has("templates") ? templates.filter((tpl) => !tpl.pack || tpl.pack === job.pack) : [];
   const canMatch = job.requirements.length > 0 && job.candidate_count > 0 && !dirty;
 
   async function saveRequirements() {
@@ -104,7 +109,7 @@ function JobDetail({ id }: { id: string }) {
     const name = window.prompt(t("req.template_name"), job?.title ?? "");
     if (!name?.trim()) return;
     try {
-      const tpl = await createTemplate({ name, requirements: cleanRequirements(draft) });
+      const tpl = await createTemplate({ name, requirements: cleanRequirements(draft), pack: job?.pack });
       setTemplates((list) => [...list, tpl]);
       setSavedNote(t("req.template_saved"));
     } catch (e) {
@@ -180,11 +185,18 @@ function JobDetail({ id }: { id: string }) {
           </div>
         ) : (
           <div className="min-w-0">
+            {pack && (packs?.length ?? 0) > 1 && (
+              <p data-ui="job-pack" className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-700">
+                {text(pack.name)}
+              </p>
+            )}
             <h1 className="title-grad break-words text-2xl font-semibold tracking-tight">{job.title}</h1>
             {job.description && <p className="mt-1 max-w-2xl text-sm text-accent-500">{job.description}</p>}
-            <div className="mt-3 max-w-md">
-              <ModePicker value={job.mode ?? "compliance"} onChange={changeMode} compact />
-            </div>
+            {(pack?.modes.length ?? 2) > 1 && (
+              <div className="mt-3 max-w-md">
+                <ModePicker value={job.mode ?? "compliance"} onChange={changeMode} compact modes={pack?.modes} />
+              </div>
+            )}
           </div>
         )}
         {!renaming && (
@@ -209,13 +221,13 @@ function JobDetail({ id }: { id: string }) {
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Panel
           icon={<ListChecks size={18} />}
-          title={t("req.title")}
-          subtitle={t((job.mode ?? "compliance") === "compliance" ? "req.subtitle_compliance" : "req.subtitle")}
+          title={tp("req.title")}
+          subtitle={tp((job.mode ?? "compliance") === "compliance" ? "req.subtitle_compliance" : "req.subtitle")}
           action={
-            templates.length > 0 ? (
+            packTemplates.length > 0 ? (
               <select className="field !w-auto !py-1.5 !text-xs" value="" onChange={(e) => loadTemplate(e.target.value)} aria-label={t("req.load_template")}>
                 <option value="">{t("req.load_template")}</option>
-                {templates.map((tpl) => (
+                {packTemplates.map((tpl) => (
                   <option key={tpl.id} value={tpl.id}>
                     {tpl.name}
                   </option>
@@ -226,6 +238,8 @@ function JobDetail({ id }: { id: string }) {
         >
           <RequirementsEditor
             compliance={(job.mode ?? "compliance") === "compliance"}
+            withPaste={has("ai_parse")}
+            withHard={has("hard_filter")}
             value={draft}
             onChange={(v) => {
               setDraft(v);
@@ -235,9 +249,11 @@ function JobDetail({ id }: { id: string }) {
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-accent-100 pt-4">
             <span className={`text-xs ${dirty ? "font-medium text-amber-700" : "text-emerald-700"}`}>{dirty ? t("req.unsaved") : savedNote}</span>
             <div className="flex gap-2">
-              <Button variant="secondary" onClick={saveTemplate} disabled={!cleanRequirements(draft).length} className="px-3 py-1.5 text-xs">
-                <BookmarkPlus size={14} /> {t("req.save_template")}
-              </Button>
+              {has("templates") && (
+                <Button variant="secondary" onClick={saveTemplate} disabled={!cleanRequirements(draft).length} className="px-3 py-1.5 text-xs">
+                  <BookmarkPlus size={14} /> {t("req.save_template")}
+                </Button>
+              )}
               <Button onClick={saveRequirements} disabled={saving || !dirty} className="px-3 py-1.5 text-xs">
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {t("req.save")}
               </Button>
@@ -245,7 +261,7 @@ function JobDetail({ id }: { id: string }) {
           </div>
         </Panel>
 
-        <Panel icon={<FileText size={18} />} title={t("res.title")}>
+        <Panel icon={<FileText size={18} />} title={tp("res.title")}>
           <DocumentsPanel jobId={id} candidates={job.candidates ?? []} disabled={!job.embedding_available} onChanged={() => load()} />
         </Panel>
       </div>
@@ -253,7 +269,7 @@ function JobDetail({ id }: { id: string }) {
       <div className="mt-5">
         <Panel
           icon={<BarChart3 size={18} />}
-          title={t("match.title")}
+          title={tp("match.title")}
           subtitle={job.last_match_at ? t("match.last_run", { time: fmtDateTime(job.last_match_at) }) : undefined}
           action={
             <Button onClick={match} disabled={matching || !canMatch}>
@@ -268,7 +284,7 @@ function JobDetail({ id }: { id: string }) {
               <AlertTriangle size={14} className="mt-px shrink-0" /> {t("match.stale")}
             </p>
           )}
-          {job.last_match ? <MatchResults result={job.last_match} /> : canMatch && <p className="text-sm text-accent-500">{t("match.empty")}</p>}
+          {job.last_match ? <MatchResults result={job.last_match} gapList={has("gap_list")} /> : canMatch && <p className="text-sm text-accent-500">{t("match.empty")}</p>}
         </Panel>
       </div>
     </div>

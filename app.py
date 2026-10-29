@@ -946,6 +946,7 @@ def _startup():
     init_db()
     load_settings()
     DOC_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_pack_dir()
     sync_tunnel()
 
 
@@ -1629,11 +1630,271 @@ class RequirementIn(BaseModel):
 JOB_MODES = ("compliance", "compare")
 
 
+# ══════════════════════════════════════════════
+# pack = ประเภทงาน (ร้านตั้งชื่อเอง + เลือกโหมด/ฟังก์ชัน) — เอนจินตรวจตัวเดียวกันทั้งหมด
+# pack เปลี่ยนได้แค่ หน้าจอ/คำเรียก/โหมด/ฟังก์ชันที่เปิด — ไม่มีข้อความใดถูกส่งเข้า prompt ของ AI
+# ที่มา 3 แบบ: sample = ตัวอย่างใน packs/ · file = ไฟล์ของร้านใน <data>/packs/ (id ซ้ำ = ใช้แทน) · app = สร้างในหน้าประเภทงาน
+# ══════════════════════════════════════════════
+
+PACK_DIRS = (ROOT / "packs", DATA_DIR / "packs")
+# ฟังก์ชันที่ pack เลือกเปิดได้ (การตรวจเอกสารเทียบข้อกำหนดเปิดเสมอ)
+PACK_FUNCTIONS = ("ai_parse", "templates", "hard_filter", "gap_list")
+DEFAULT_PACK = "general"
+_PACK_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+_PACKS_KEY = "packs"          # เปิด/ปิด + ฟังก์ชันที่ร้านปรับ ของทุก pack
+_APP_PACKS_KEY = "app_packs"  # pack ที่ร้านสร้างในหน้าประเภทงาน
+
+_PACKS_README = """\
+Packs (advanced): one file = one kind of checking work. The easy way is the Packs page
+in the back office (name it, tick the modes and functions). Files can do the same and more.
+Every pack uses the same checking engine. A pack only changes the screens, the words
+on them, the allowed modes and which functions are switched on. Nothing in a pack is
+sent to the AI.
+
+Put your own pack here as <id>.json. Copy a built-in pack to start; a file with the same
+"id" as a built-in pack replaces it. Example:
+
+{
+  "id": "my-pack",                       // a-z 0-9 - _ (max 40)
+  "order": 50,                           // position in the list
+  "name": {"en": "My check", "th": "..."},   // text per language, or a locale key
+  "description": {"en": "What this pack is for"},
+  "modes": ["compliance", "compare"],    // compliance = pass/fail, compare = rank documents
+  "default_mode": "compliance",
+  "functions": ["ai_parse", "templates", "hard_filter", "gap_list"],
+  "text": {"req.title": {"en": "Conditions"}}   // replace any screen text by its locale key
+}
+
+(Remove the // comments in a real file — JSON has no comments.)
+Functions can also be switched on/off per pack in the back office (Packs page).
+"""
+
+
+def _pack_text(value) -> str | dict | None:
+    """ข้อความใน pack: str = key ในไฟล์ภาษา · dict = ข้อความแยกตามภาษา {"th": ..., "en": ...}"""
+    if isinstance(value, str):
+        return value.strip()[:200] or None
+    if isinstance(value, dict):
+        out = {str(k)[:8]: v.strip()[:500] for k, v in value.items() if isinstance(v, str) and v.strip()}
+        return out or None
+    return None
+
+
+def _read_pack(path: Path, source: str) -> dict | None:
+    try:
+        raw = json.loads(path.read_text("utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    return _pack_from_raw(raw, source, path.stem)
+
+
+def _pack_from_raw(raw, source: str, fallback_id: str = "") -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    pid = str(raw.get("id") or fallback_id).strip().lower()
+    if not _PACK_ID.match(pid):
+        return None
+    modes = [m for m in (raw.get("modes") or JOB_MODES) if m in JOB_MODES] or list(JOB_MODES)
+    try:
+        order = int(raw.get("order", 100))
+    except (TypeError, ValueError):
+        order = 100
+    text = {}
+    for k, v in (raw.get("text") or {}).items() if isinstance(raw.get("text"), dict) else ():
+        v = _pack_text(v)
+        if v:
+            text[str(k)[:80]] = v
+    return {"id": pid, "order": order, "source": source,
+            "name": _pack_text(raw.get("name")) or pid, "description": _pack_text(raw.get("description")),
+            "modes": modes, "default_mode": raw.get("default_mode") if raw.get("default_mode") in modes else modes[0],
+            "functions": [f for f in PACK_FUNCTIONS if f in (raw.get("functions") or [])], "text": text}
+
+
+def _setting_json(key: str) -> dict:
+    with _db() as c:
+        row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return json.loads(row[0]) if row else {}
+
+
+def _save_setting_json(key: str, data: dict) -> None:
+    with _db_lock, _db() as c:
+        c.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (key, json.dumps(data, ensure_ascii=False)))
+
+
+def _pack_overrides() -> dict:
+    return _setting_json(_PACKS_KEY)
+
+
+def _save_pack_overrides(data: dict) -> None:
+    _save_setting_json(_PACKS_KEY, data)
+
+
+def load_packs() -> tuple[dict[str, dict], list[str]]:
+    """pack ทั้งหมดตามลำดับ + ชื่อไฟล์ที่อ่านไม่ได้ (ให้หลังบ้านแจ้งร้าน)"""
+    packs: dict[str, dict] = {}
+    broken: list[str] = []
+    for d in PACK_DIRS:
+        if not d.is_dir():
+            continue
+        for path in sorted(d.glob("*.json")):
+            pack = _read_pack(path, "sample" if d == PACK_DIRS[0] else "file")
+            if pack:
+                packs[pack["id"]] = pack
+            else:
+                broken.append(path.name)
+    for pid, raw in _setting_json(_APP_PACKS_KEY).items():
+        pack = _pack_from_raw({**raw, "id": pid}, "app")
+        if pack and pid not in packs:
+            packs[pid] = pack
+    if DEFAULT_PACK not in packs:  # งานเก่าที่ไม่มี pack ต้องเปิดได้เสมอ
+        packs[DEFAULT_PACK] = {"id": DEFAULT_PACK, "order": 0, "source": "sample", "name": "pack.general.name",
+                               "description": None, "modes": list(JOB_MODES), "default_mode": JOB_MODES[0],
+                               "functions": list(PACK_FUNCTIONS), "text": {}}
+    overrides = _pack_overrides()
+    for pid, pack in packs.items():
+        o = overrides.get(pid) or {}
+        pack["default_functions"] = list(pack["functions"])
+        if isinstance(o.get("functions"), list):
+            pack["functions"] = [f for f in PACK_FUNCTIONS if f in o["functions"]]
+        pack["enabled"] = bool(o.get("enabled", True))
+    return dict(sorted(packs.items(), key=lambda kv: (kv[1]["order"], kv[0]))), broken
+
+
+def _job_pack(job: dict, packs: dict | None = None) -> dict:
+    packs = packs or load_packs()[0]
+    return packs.get(job.get("pack") or DEFAULT_PACK) or packs[DEFAULT_PACK]
+
+
+def ensure_pack_dir() -> None:
+    folder = PACK_DIRS[1]
+    folder.mkdir(parents=True, exist_ok=True)
+    readme = folder / "README.txt"
+    if not readme.exists():
+        readme.write_text(_PACKS_README, "utf-8")
+
+
+class PackIn(BaseModel):
+    name: str
+    description: str = ""
+    modes: list[str] = Field(default_factory=lambda: list(JOB_MODES))
+    default_mode: str | None = None
+    functions: list[str] = Field(default_factory=list)
+
+
+class PackUpdateIn(BaseModel):
+    enabled: bool | None = None
+    functions: list[str] | None = None
+    # แก้ได้เฉพาะ pack ที่ร้านสร้างเอง
+    name: str | None = None
+    description: str | None = None
+    modes: list[str] | None = None
+    default_mode: str | None = None
+
+
+def _app_pack_raw(name: str, description: str, modes: list[str], default_mode: str | None, functions: list[str], order: int) -> dict:
+    """ชื่อ/คำอธิบายที่ร้านพิมพ์เก็บเป็น {"_": ข้อความ} — ไม่ใช่ key ในไฟล์ภาษา แสดงเหมือนกันทุกภาษา"""
+    name = name.strip()[:80]
+    if not name:
+        raise err(400, "pack_name_required", "Enter a name")
+    modes = [m for m in JOB_MODES if m in modes]
+    if not modes:
+        raise err(400, "pack_modes_required", "Choose at least one mode")
+    raw = {"order": order, "name": {"_": name}, "modes": modes,
+           "default_mode": default_mode if default_mode in modes else modes[0],
+           "functions": [f for f in PACK_FUNCTIONS if f in functions]}
+    if description.strip():
+        raw["description"] = {"_": description.strip()[:300]}
+    return raw
+
+
+@app.get("/api/packs")
+def packs_list():
+    packs, broken = load_packs()
+    return {"packs": list(packs.values()), "functions": list(PACK_FUNCTIONS), "broken": broken}
+
+
+@app.post("/api/admin/packs")
+def pack_create(req: PackIn):
+    stored = _setting_json(_APP_PACKS_KEY)
+    pid = "p" + uuid.uuid4().hex[:10]
+    stored[pid] = _app_pack_raw(req.name, req.description, req.modes, req.default_mode, req.functions, 1000 + len(stored))
+    _save_setting_json(_APP_PACKS_KEY, stored)
+    return load_packs()[0][pid]
+
+
+@app.delete("/api/admin/packs/{pid}")
+def pack_delete(pid: str):
+    stored = _setting_json(_APP_PACKS_KEY)
+    if pid not in stored:
+        raise err(404, "pack_not_found", "Pack not found")
+    used = sum(1 for j in db_all("jobs") if j.get("pack") == pid)
+    if used:
+        raise err(409, "pack_in_use", "Checklists still use this kind of work", n=used)
+    packs, _ = load_packs()
+    if packs[pid]["enabled"] and not any(p["enabled"] for k, p in packs.items() if k != pid):
+        raise err(400, "pack_last_enabled", "Keep at least one pack switched on")
+    stored.pop(pid)
+    _save_setting_json(_APP_PACKS_KEY, stored)
+    overrides = _pack_overrides()
+    if overrides.pop(pid, None) is not None:
+        _save_pack_overrides(overrides)
+    return {"ok": True}
+
+
+@app.put("/api/admin/packs/{pid}")
+def pack_update(pid: str, req: PackUpdateIn):
+    packs, _ = load_packs()
+    if pid not in packs:
+        raise err(404, "pack_not_found", "Pack not found")
+    if any(v is not None for v in (req.name, req.description, req.modes, req.default_mode)):
+        stored = _setting_json(_APP_PACKS_KEY)
+        if packs[pid]["source"] != "app" or pid not in stored:
+            raise err(400, "pack_readonly", "Only kinds of work made on this page can be renamed or changed")
+        cur = packs[pid]
+        name = req.name if req.name is not None else next(iter(cur["name"].values()), "")
+        desc = req.description if req.description is not None else next(iter((cur["description"] or {}).values()), "")
+        stored[pid] = _app_pack_raw(name, desc, req.modes if req.modes is not None else cur["modes"],
+                                    req.default_mode or cur["default_mode"],
+                                    req.functions if req.functions is not None else cur["default_functions"],
+                                    cur["order"])
+        _save_setting_json(_APP_PACKS_KEY, stored)
+    overrides = _pack_overrides()
+    o = dict(overrides.get(pid) or {})
+    if req.enabled is not None:
+        if not req.enabled and not any(p["enabled"] for k, p in packs.items() if k != pid):
+            raise err(400, "pack_last_enabled", "Keep at least one pack switched on")
+        o["enabled"] = req.enabled
+    if req.functions is not None:
+        if packs[pid]["source"] == "app":  # ของร้านเอง: แก้ที่ตัว pack เลย ไม่มี "ค่าเริ่มต้น" ให้ย้อน
+            stored = _setting_json(_APP_PACKS_KEY)
+            stored[pid]["functions"] = [f for f in PACK_FUNCTIONS if f in req.functions]
+            _save_setting_json(_APP_PACKS_KEY, stored)
+            o.pop("functions", None)
+        else:
+            o["functions"] = [f for f in PACK_FUNCTIONS if f in req.functions]
+    overrides[pid] = o
+    _save_pack_overrides(overrides)
+    return load_packs()[0][pid]
+
+
+@app.delete("/api/admin/packs/{pid}/overrides")
+def pack_reset(pid: str):
+    overrides = _pack_overrides()
+    overrides.pop(pid, None)
+    _save_pack_overrides(overrides)
+    packs, _ = load_packs()
+    if pid not in packs:
+        raise err(404, "pack_not_found", "Pack not found")
+    return packs[pid]
+
+
 class JobIn(BaseModel):
     title: str
     description: str = ""
     requirements: list[RequirementIn] = Field(default_factory=list)
-    mode: str = "compliance"
+    mode: str | None = None  # ว่าง = โหมดเริ่มต้นของ pack
+    pack: str = DEFAULT_PACK
 
 
 class JobUpdateIn(BaseModel):
@@ -1650,6 +1911,7 @@ class ParseIn(BaseModel):
 class TemplateIn(BaseModel):
     name: str
     requirements: list[RequirementIn] = Field(default_factory=list)
+    pack: str | None = None  # ว่าง = ใช้ได้ทุก pack
 
 
 class TemplateUpdateIn(BaseModel):
@@ -1686,6 +1948,7 @@ def _job_out(job: dict, detail: bool = False) -> dict:
     cands = _candidates(job["id"])
     out = {k: v for k, v in job.items() if k not in ("embedding", "last_match")}
     out["candidate_count"] = len(cands)
+    out["pack"] = job.get("pack") or DEFAULT_PACK
     out["embedding_available"] = (job.get("embedding") or {}).get("model_id") in load_settings()["registry"]
     # ผลตรวจเก่ากว่าการแก้ข้อกำหนด/เอกสารล่าสุด → หน้าจอบอกให้ตรวจใหม่
     out["match_stale"] = bool(job.get("last_match_at")) and (job.get("updated_at") or "") > job["last_match_at"]
@@ -1726,6 +1989,8 @@ def template_create(req: TemplateIn):
     if not req.name.strip():
         raise err(400, "template_name_required", "Enter a template name")
     tpl = {"id": _new_id(), "name": req.name.strip(), "requirements": _normalize(req.requirements), "created_at": _now()}
+    if req.pack:
+        tpl["pack"] = req.pack
     db_put("templates", tpl["id"], tpl)
     return tpl
 
@@ -1760,14 +2025,19 @@ def jobs_list():
 def job_create(req: JobIn):
     if not req.title.strip():
         raise err(400, "job_title_required", "Enter a checklist name")
-    if req.mode not in JOB_MODES:
+    packs, _ = load_packs()
+    pack = packs.get(req.pack)
+    if not pack or not pack["enabled"]:
+        raise err(400, "pack_not_found", "Pack not found")
+    mode = req.mode or pack["default_mode"]
+    if mode not in pack["modes"]:
         raise err(400, "invalid_job_mode", "Unsupported mode")
     s = load_settings()
     mid, entry = resolve_model(s, "embedding")
     if not entry:
         raise err(400, "embedding_model_missing", "Add an embedding model in Settings first")
     jid = _new_id()
-    job = {"id": jid, "title": req.title.strip(), "description": req.description.strip(), "mode": req.mode,
+    job = {"id": jid, "title": req.title.strip(), "description": req.description.strip(), "mode": mode, "pack": pack["id"],
            "requirements": _normalize(req.requirements), "collection_name": f"screen_{jid}",
            "created_at": _now(), "updated_at": _now(), "last_match": None, "last_match_at": None,
            # ผูก embedding ตอนสร้าง — เปลี่ยนทีหลังไม่ได้ (vector ต่างโมเดลเทียบกันไม่ได้)
@@ -1792,7 +2062,7 @@ def job_update(job_id: str, req: JobUpdateIn):
     if req.requirements is not None:
         job["requirements"] = _normalize(req.requirements)
     if req.mode is not None:
-        if req.mode not in JOB_MODES:
+        if req.mode not in _job_pack(job)["modes"]:
             raise err(400, "invalid_job_mode", "Unsupported mode")
         job["mode"] = req.mode
     _touch(job)
@@ -1903,6 +2173,8 @@ def job_match(job_id: str):
     mode = job.get("mode") or "compliance"
     if mode == "compliance":  # completeness check: exactly the "required" items are mandatory; optional items never fail a document
         public["requirements"] = [{**r, "hard_filter": r.get("kind") == "required"} for r in job["requirements"]]
+    elif "hard_filter" not in _job_pack(job)["functions"]:  # pack ปิดเกณฑ์ตกทันที → ไม่มีข้อไหนตัดเอกสารทิ้ง
+        public["requirements"] = [{**r, "hard_filter": False} for r in job["requirements"]]
     res = central_json("/v1/screening/match", {"ctx": _job_ctx(job, use_rerank=True), "kb": kb_payload(_job_kb(job)),
                                                "job": public, "candidates": cands})
     add_usage(res.pop("usage", None))

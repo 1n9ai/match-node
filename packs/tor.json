@@ -1,0 +1,15 @@
+{
+  "id": "tor",
+  "order": 10,
+  "name": "pack.tor.name",
+  "description": "pack.tor.desc",
+  "modes": ["compliance"],
+  "default_mode": "compliance",
+  "functions": ["ai_parse", "templates", "gap_list"],
+  "text": {
+    "jobform.title": "pack.tor.new",
+    "jobform.name": "pack.tor.job_name",
+    "req.title": "pack.tor.req_title",
+    "res.title": "pack.tor.docs_title"
+  }
+}

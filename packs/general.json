@@ -1,0 +1,9 @@
+{
+  "id": "general",
+  "order": 0,
+  "name": "pack.general.name",
+  "description": "pack.general.desc",
+  "modes": ["compliance", "compare"],
+  "default_mode": "compliance",
+  "functions": ["ai_parse", "templates", "hard_filter", "gap_list"]
+}

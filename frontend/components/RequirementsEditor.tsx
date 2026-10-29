@@ -15,11 +15,14 @@ export function RequirementsEditor({
   onChange,
   withPaste = true,
   compliance = false,
+  withHard = true,
 }: {
   value: Requirement[];
   onChange: (next: Requirement[]) => void;
   withPaste?: boolean;
   compliance?: boolean;
+  /** pack เปิดเกณฑ์ตกทันทีไหม */
+  withHard?: boolean;
 }) {
   const { t, errorText } = useI18n();
   const [paste, setPaste] = useState("");
@@ -93,7 +96,7 @@ export function RequirementsEditor({
                   </button>
                 ))}
               </div>
-              {!compliance && (
+              {!compliance && withHard && (
               <label className="flex items-center gap-1.5 text-xs text-accent-600" title={t("req.hard_hint")}>
                 <input
                   type="checkbox"

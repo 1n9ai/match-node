@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Briefcase, Check, ChevronDown, ClipboardList, Globe, LogOut, Settings } from "lucide-react";
+import { Boxes, Briefcase, Check, ChevronDown, ClipboardList, Globe, LogOut, Settings } from "lucide-react";
 import { claimLicense, getAdminStatus, getMe, getSetup, logout } from "@/lib/api";
 import { LANGS, useI18n, type Lang } from "@/lib/i18n";
 import type { LicenseInfo } from "@/lib/types";
@@ -11,6 +11,7 @@ import type { LicenseInfo } from "@/lib/types";
 const NAV = [
   { href: "/", key: "nav.jobs", icon: Briefcase, match: (p: string) => p === "/" || p.startsWith("/job") },
   { href: "/templates/", key: "nav.templates", icon: ClipboardList, match: (p: string) => p.startsWith("/templates") },
+  { href: "/packs/", key: "nav.packs", icon: Boxes, match: (p: string) => p.startsWith("/packs") },
   { href: "/settings/", key: "nav.settings", icon: Settings, match: (p: string) => p.startsWith("/settings") },
 ];
 

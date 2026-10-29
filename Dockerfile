@@ -23,6 +23,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app.py tunnel_client.py ./
+COPY packs/ ./packs/
 COPY --from=web /web/out /app/web
 
 # data/ = node.db (การตั้งค่า/ชุดเกณฑ์/ผลการตรวจ) + documents/ (ไฟล์เอกสารต้นฉบับ)

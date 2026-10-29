@@ -8,6 +8,8 @@ import type {
   JobMode,
   MatchResult,
   ModelRole,
+  Pack,
+  PackFunction,
   NodeSettings,
   ProtocolId,
   ProtocolInfo,
@@ -67,7 +69,7 @@ const json = (body: unknown) => JSON.stringify(body);
 
 export const listJobs = () => request<{ jobs: Job[] }>("/api/jobs");
 export const getJob = (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`);
-export const createJob = (body: { title: string; description?: string; requirements?: Requirement[]; mode?: JobMode }) =>
+export const createJob = (body: { title: string; description?: string; requirements?: Requirement[]; mode?: JobMode; pack?: string }) =>
   request<Job>("/api/jobs", { method: "POST", body: json(body) });
 export const updateJob = (id: string, body: Partial<Pick<Job, "title" | "description" | "requirements" | "mode">>) =>
   request<Job>(`/api/jobs/${encodeURIComponent(id)}`, { method: "PUT", body: json(body) });
@@ -88,8 +90,16 @@ export const parseRequirements = (text: string) =>
 
 // ── เทมเพลต ──
 
+export const listPacks = () => request<{ packs: Pack[]; functions: PackFunction[]; broken: string[] }>("/api/packs");
+export type PackBody = { name: string; description?: string; modes: JobMode[]; default_mode?: JobMode; functions: PackFunction[] };
+export const createPack = (body: PackBody) => request<Pack>("/api/admin/packs", { method: "POST", body: json(body) });
+export const updatePack = (id: string, body: Partial<PackBody> & { enabled?: boolean }) =>
+  request<Pack>(`/api/admin/packs/${encodeURIComponent(id)}`, { method: "PUT", body: json(body) });
+export const deletePack = (id: string) => request<{ ok: true }>(`/api/admin/packs/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const resetPack = (id: string) => request<Pack>(`/api/admin/packs/${encodeURIComponent(id)}/overrides`, { method: "DELETE" });
+
 export const listTemplates = () => request<{ templates: Template[] }>("/api/templates");
-export const createTemplate = (body: { name: string; requirements: Requirement[] }) =>
+export const createTemplate = (body: { name: string; requirements: Requirement[]; pack?: string }) =>
   request<Template>("/api/templates", { method: "POST", body: json(body) });
 export const updateTemplate = (id: string, body: { name?: string; requirements?: Requirement[] }) =>
   request<Template>(`/api/templates/${encodeURIComponent(id)}`, { method: "PUT", body: json(body) });

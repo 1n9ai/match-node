@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, ChevronDown, ShieldAlert, ShieldCheck, XCircle } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, ClipboardList, Copy, ShieldAlert, ShieldCheck, XCircle } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { CandidateResult, MatchResult, MatchStatus } from "@/lib/types";
 
@@ -12,7 +12,56 @@ const STATUS_STYLE: Record<MatchStatus, { dot: string; pill: string; key: string
   failed: { dot: "bg-rose-500", pill: "bg-rose-50 text-rose-700 ring-rose-200", key: "match.failed" },
 };
 
-function Row({ rank, r, compliance }: { rank: number; r: CandidateResult; compliance: boolean }) {
+/** รายการ "ยังขาดอะไร" ของเอกสารหนึ่งฉบับ — ข้อที่ไม่เจอ/ไม่ชัด ข้อบังคับขึ้นก่อน (สร้างจากผลตรวจ ไม่เรียก AI เพิ่ม) */
+function GapList({ r }: { r: CandidateResult }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const gaps = r.requirements
+    .filter((q) => q.status !== "found")
+    .sort((a, b) => Number(b.kind === "required") - Number(a.kind === "required") || a.index - b.index);
+
+  async function copy() {
+    const lines = gaps.map((q) => `- ${q.text} (${t(STATUS_STYLE[q.status].key)}${q.kind === "required" ? `, ${t("req.kind_required")}` : ""})`);
+    try {
+      await navigator.clipboard.writeText([`${t("gap.title")}: ${r.candidate.name}`, ...lines].join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* เบราว์เซอร์ไม่ให้คัดลอก — ผู้ใช้เลือกข้อความเองได้ */
+    }
+  }
+
+  return (
+    <div data-ui="gap-list" className="mx-4 mb-1 mt-3 rounded-lg bg-amber-50/60 px-3 py-2.5 ring-1 ring-inset ring-amber-200/70">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-900">
+          <ClipboardList size={13} /> {gaps.length ? t("gap.title_n", { n: gaps.length }) : t("gap.none")}
+        </p>
+        {gaps.length > 0 && (
+          <button type="button" onClick={copy} className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100">
+            {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? t("gap.copied") : t("gap.copy")}
+          </button>
+        )}
+      </div>
+      {gaps.length > 0 && (
+        <ul className="mt-1.5 flex flex-col gap-1">
+          {gaps.map((q) => (
+            <li key={q.index} className="flex items-start gap-2 text-xs text-accent-800">
+              <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${STATUS_STYLE[q.status].dot}`} />
+              <span>
+                {q.text}
+                {q.kind === "required" && <span className="ml-1 text-[10px] font-semibold uppercase text-accent-400">{t("req.kind_required")}</span>}
+                <span className="ml-1 text-[10px] text-accent-400">· {t(STATUS_STYLE[q.status].key)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Row({ rank, r, compliance, gapList }: { rank: number; r: CandidateResult; compliance: boolean; gapList: boolean }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(rank === 1);
   return (
@@ -66,6 +115,7 @@ function Row({ rank, r, compliance }: { rank: number; r: CandidateResult; compli
           <ChevronDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} />
         </span>
       </button>
+      {open && gapList && <GapList r={r} />}
       {open && (
         <ol className="flex flex-col gap-2 border-t border-accent-100 px-4 py-3">
           {r.requirements.map((q) => {
@@ -106,7 +156,7 @@ function Row({ rank, r, compliance }: { rank: number; r: CandidateResult; compli
   );
 }
 
-export function MatchResults({ result }: { result: MatchResult }) {
+export function MatchResults({ result, gapList = false }: { result: MatchResult; gapList?: boolean }) {
   const { t } = useI18n();
   const compliance = (result.mode ?? "compare") === "compliance";
   return (
@@ -114,7 +164,7 @@ export function MatchResults({ result }: { result: MatchResult }) {
       <p className="text-xs text-accent-500">{t(result.scorer === "cross-encoder" ? "match.scorer_rerank" : "match.scorer_cosine")}</p>
       <ol className="flex flex-col gap-2.5">
         {result.candidates.map((r, i) => (
-          <Row key={r.candidate.id} rank={i + 1} r={r} compliance={compliance} />
+          <Row key={r.candidate.id} rank={i + 1} r={r} compliance={compliance} gapList={gapList} />
         ))}
       </ol>
       <p className="text-[11px] text-accent-400">{t("match.disclaimer")}</p>

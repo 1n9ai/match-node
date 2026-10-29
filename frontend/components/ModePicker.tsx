@@ -10,11 +10,23 @@ const MODES: { id: JobMode; icon: typeof Scale }[] = [
 ];
 
 /** how documents are judged: pass/fail completeness check, or ranking several documents against each other */
-export function ModePicker({ value, onChange, compact = false }: { value: JobMode; onChange: (m: JobMode) => void; compact?: boolean }) {
+export function ModePicker({
+  value,
+  onChange,
+  compact = false,
+  modes,
+}: {
+  value: JobMode;
+  onChange: (m: JobMode) => void;
+  compact?: boolean;
+  /** โหมดที่ pack อนุญาต (ไม่ระบุ = ทุกโหมด) */
+  modes?: JobMode[];
+}) {
   const { t } = useI18n();
+  const shown = modes ? MODES.filter((m) => modes.includes(m.id)) : MODES;
   return (
-    <div role="radiogroup" aria-label={t("mode.label")} className={`grid gap-2 ${compact ? "" : "sm:grid-cols-2"}`}>
-      {MODES.map(({ id, icon: Icon }) => {
+    <div role="radiogroup" aria-label={t("mode.label")} className={`grid gap-2 ${compact || shown.length < 2 ? "" : "sm:grid-cols-2"}`}>
+      {shown.map(({ id, icon: Icon }) => {
         const on = value === id;
         return (
           <button

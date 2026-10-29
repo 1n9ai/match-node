@@ -88,6 +88,7 @@ export interface Template {
   id: string;
   name: string;
   requirements: Requirement[];
+  pack?: string;
   created_at: string;
 }
 
@@ -143,6 +144,7 @@ export interface Job {
   description: string;
   requirements: Requirement[];
   mode?: JobMode;
+  pack: string;
   created_at: string;
   updated_at?: string;
   last_match_at: string | null;
@@ -151,6 +153,28 @@ export interface Job {
   match_stale: boolean;
   candidates?: Candidate[];
   last_match?: MatchResult | null;
+}
+
+// ── pack: ชุดตั้งค่าของงานแต่ละประเภท ──
+
+/** ข้อความใน pack: key ในไฟล์ภาษา หรือข้อความแยกตามภาษา */
+export type PackText = string | Record<string, string>;
+
+export type PackFunction = "ai_parse" | "templates" | "hard_filter" | "gap_list";
+
+export interface Pack {
+  id: string;
+  order: number;
+  /** sample = ตัวอย่างที่มากับระบบ · file = ไฟล์ใน data/packs · app = ร้านสร้างในหน้าประเภทงาน */
+  source: "sample" | "file" | "app";
+  enabled: boolean;
+  name: PackText;
+  description: PackText | null;
+  modes: JobMode[];
+  default_mode: JobMode;
+  functions: PackFunction[];
+  default_functions: PackFunction[];
+  text: Record<string, PackText>;
 }
 
 export type BillingPrice = { amount: number; currency: string };
